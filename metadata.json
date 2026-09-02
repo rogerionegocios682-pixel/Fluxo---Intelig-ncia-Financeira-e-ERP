@@ -1,0 +1,8 @@
+{
+  "name": "Fluxo - Inteligência Financeira e ERP",
+  "description": "Sistema de inteligência financeira, simulador de compras e prazos, gestão de contas a pagar, calendário financeiro e multi-empresas com gestão de equipe.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

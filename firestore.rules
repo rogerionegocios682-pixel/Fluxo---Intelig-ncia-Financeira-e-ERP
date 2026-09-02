@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Connection test document
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Access Requests Collection (for Admin approval workflow)
+    match /access_requests/{requestId} {
+      allow read, write: if true;
+    }
+
+    // Audit Logs Collection (Master Activity Logs)
+    match /audit_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /masterAuditLogs/{logId} {
+      allow read, write: if true;
+    }
+
+    // Companies and all nested subcollections (bills, purchases, suppliers, collaborators, etc.)
+    match /companies/{companyId} {
+      allow read, write: if true;
+
+      match /{allSubcollections=**} {
+        allow read, write: if true;
+      }
+    }
+  }
+}
+
