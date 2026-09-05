@@ -16,8 +16,10 @@ import {
   Shield,
   Loader2,
   Sparkles,
+  Lock,
+  AlertTriangle,
 } from 'lucide-react';
-import { AuthSession, CompanyDatabase, UserRole } from '../types';
+import { AuthSession, CompanyDatabase, UserRole, getCriticalDays } from '../types';
 import { FirebaseService } from '../services/firebase';
 
 interface SettingsViewProps {
@@ -40,6 +42,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [state, setState] = useState(data.profile.state || '');
   const [dailyLimit, setDailyLimit] = useState<number | ''>(data.profile.dailyLimit || 15000);
   const [protectedDay, setProtectedDay] = useState<number | ''>(data.profile.protectedDay || 20);
+  const initialCritical = getCriticalDays(data.profile);
+  const [criticalDays, setCriticalDays] = useState<(number | '')[]>([
+    initialCritical[0] ?? 5,
+    initialCritical[1] ?? 10,
+    initialCritical[2] ?? 15,
+    initialCritical[3] ?? 20,
+    initialCritical[4] ?? 25,
+  ]);
   const [logoBase64, setLogoBase64] = useState<string>(data.profile.logo || '');
 
   const [profileSuccessMsg, setProfileSuccessMsg] = useState<string | null>(null);
@@ -68,6 +78,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setState(data.profile.state || '');
     setDailyLimit(data.profile.dailyLimit || 15000);
     setProtectedDay(data.profile.protectedDay || 20);
+    const crits = getCriticalDays(data.profile);
+    setCriticalDays([
+      crits[0] ?? '',
+      crits[1] ?? '',
+      crits[2] ?? '',
+      crits[3] ?? '',
+      crits[4] ?? '',
+    ]);
     setLogoBase64(data.profile.logo || '');
   }, [data.profile]);
 
@@ -161,7 +179,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setProfileErrorMsg(null);
 
     const dLim = typeof dailyLimit === 'number' ? dailyLimit : parseFloat(dailyLimit) || 15000;
-    const pDay = typeof protectedDay === 'number' ? protectedDay : parseInt(protectedDay, 10) || 20;
+    const validCritical = criticalDays
+      .map((d) => (typeof d === 'number' ? d : parseInt(String(d), 10)))
+      .filter((d) => !isNaN(d) && d >= 1 && d <= 31);
+    const distinctCritical = Array.from(new Set(validCritical)).sort((a, b) => a - b);
+    const finalCritical = distinctCritical.length > 0 ? distinctCritical : [20];
+    const pDay = finalCritical[0];
 
     try {
       await FirebaseService.updateCompanyProfile(data.profile.id, {
@@ -174,10 +197,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         state: state.trim(),
         dailyLimit: dLim,
         protectedDay: pDay,
+        criticalDays: finalCritical,
         logo: logoBase64,
       });
 
-      setProfileSuccessMsg('Logomarca, CNPJ, telefone e perfil atualizados no Firestore com sucesso!');
+      setProfileSuccessMsg('Dados da empresa, limites e as 5 opções de travas de compras atualizados no Firestore com sucesso!');
       setTimeout(() => setProfileSuccessMsg(null), 4000);
     } catch (err: any) {
       console.error(err);
@@ -534,20 +558,80 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-                    Dia Protegido do Mês (1 a 31)
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-300 mb-1 flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Datas com Atenção (5 Travas para Compras)</span>
                   </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="31"
-                    value={protectedDay}
-                    onChange={(e) => {
-                      const val = e.target.value === '' ? '' : parseInt(e.target.value, 10);
-                      setProtectedDay(val);
-                    }}
-                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-3.5 py-2 font-mono text-sm font-bold text-purple-300 focus:outline-none focus:border-teal-400"
-                  />
+                  <p className="text-[11px] text-slate-400">
+                    Defina abaixo até 5 dias críticos do mês para alertar e travar compras.
+                  </p>
+                </div>
+              </div>
+
+              {/* 5 Options for Critical / Lock Dates */}
+              <div className="bg-slate-900/60 border border-amber-500/20 rounded-2xl p-3.5 sm:p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-400" />
+                    5 Opções de Datas para Travar Compras (Dias do Mês 1 a 31)
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium">
+                    Ativa alertas para compradores no simulador
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                  {[
+                    { slot: 0, label: 'Trava 1', hint: 'Ex: Dia 5 (Adiant.)' },
+                    { slot: 1, label: 'Trava 2', hint: 'Ex: Dia 10 (Folha)' },
+                    { slot: 2, label: 'Trava 3', hint: 'Ex: Dia 15 (DAS/Imp.)' },
+                    { slot: 3, label: 'Trava 4', hint: 'Ex: Dia 20 (FGTS/Forn.)' },
+                    { slot: 4, label: 'Trava 5', hint: 'Ex: Dia 25 (Aluguel)' },
+                  ].map(({ slot, label, hint }) => {
+                    const currentVal = criticalDays[slot];
+                    return (
+                      <div
+                        key={slot}
+                        className={`p-2.5 rounded-xl border transition-all ${
+                          currentVal !== '' && currentVal !== undefined
+                            ? 'bg-amber-500/10 border-amber-500/40'
+                            : 'bg-slate-950/60 border-white/10 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                            {label}
+                          </span>
+                          {currentVal !== '' && currentVal !== undefined && (
+                            <Lock className="w-3 h-3 text-amber-400" />
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs font-mono font-bold text-slate-500">Dia</span>
+                          <input
+                            type="number"
+                            min="1"
+                            max="31"
+                            placeholder="1-31"
+                            value={currentVal ?? ''}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              const val = raw === '' ? '' : parseInt(raw, 10);
+                              setCriticalDays((prev) => {
+                                const next = [...prev];
+                                next[slot] = val;
+                                return next;
+                              });
+                            }}
+                            className="w-full bg-slate-900 border border-white/10 rounded-lg px-2 py-1 font-mono text-xs font-bold text-amber-300 focus:outline-none focus:border-amber-400 text-center"
+                          />
+                        </div>
+                        <span className="block text-[9px] text-slate-500 truncate mt-1">
+                          {hint}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

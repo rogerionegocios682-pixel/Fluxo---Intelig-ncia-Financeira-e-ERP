@@ -250,28 +250,11 @@ export function App() {
 
   // Real-time Firestore synchronization whenever activeCompanyId is set
   useEffect(() => {
-    if (!activeCompanyId || activeCompanyId === 'master' || activeCompanyId === 'master_default') {
-      // Default fallback profile for Master when not inspecting a specific company
-      if (isSuperAdmin) {
-        setCompanyData({
-          profile: {
-            id: 'master_control',
-            name: 'Painel Central Master',
-            cnpj: '00.000.000/0001-00',
-            phone: '(00) 00000-0000',
-            address: 'Central de Operações',
-            dailyLimit: 0,
-            monthlyLimit: 0,
-            protectedDay: 20,
-            status: 'ATIVA',
-            createdAt: new Date().toISOString(),
-          },
-          bills: [],
-          purchases: [],
-          suppliers: [],
-          collaborators: [],
-        });
-      }
+    const targetCompanyId = (!activeCompanyId || activeCompanyId === 'master' || activeCompanyId === 'master_default')
+      ? (isSuperAdmin ? 'master_control' : '')
+      : activeCompanyId;
+
+    if (!targetCompanyId) {
       return;
     }
 
@@ -279,17 +262,21 @@ export function App() {
 
     // Subscribe to real-time company document and all subcollections
     const unsubscribe = FirebaseService.subscribeToCompanyData(
-      activeCompanyId,
+      targetCompanyId,
       (data) => {
         if (!isSubscribed) return;
 
         const updatedProfile: CompanyProfile = {
           ...data.profile,
-          id: activeCompanyId,
+          id: targetCompanyId,
+          name: data.profile.name || (targetCompanyId === 'master_control' ? 'Painel Central Master' : 'Minha Loja'),
           status: data.profile.status || 'ATIVA',
           dailyLimit: Number(data.profile.dailyLimit || 0),
           monthlyLimit: Number(data.profile.monthlyLimit || 0),
           protectedDay: Number(data.profile.protectedDay || 20),
+          criticalDays: Array.isArray(data.profile.criticalDays) && data.profile.criticalDays.length > 0
+            ? data.profile.criticalDays
+            : [Number(data.profile.protectedDay || 20)],
         };
 
         // Trigger immediate state update across all components with fresh references
@@ -314,7 +301,7 @@ export function App() {
         });
       },
       (error) => {
-        console.warn(`[Firestore Realtime] Sync notice for store ${activeCompanyId}:`, error);
+        console.warn(`[Firestore Realtime] Sync notice for store ${targetCompanyId}:`, error);
       }
     );
 

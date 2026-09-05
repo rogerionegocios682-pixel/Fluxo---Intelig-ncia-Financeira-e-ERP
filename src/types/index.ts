@@ -82,6 +82,7 @@ export interface CompanyProfile {
   dailyLimit: number;
   monthlyLimit: number;
   protectedDay: number; // e.g. 20 for payroll / tax protected day
+  criticalDays?: number[]; // Up to 5 critical lock dates for purchases (e.g., [5, 10, 15, 20, 25])
   createdAt: string;
   updatedAt?: string;
   lastAccessAt?: string;
@@ -172,4 +173,30 @@ export type NavigationRoute =
   | 'master-lojas'
   | 'master-usuarios'
   | 'master-atividades';
+
+/**
+ * Returns the list of configured critical lock dates for purchases (up to 5 days, 1 to 31).
+ * Defaults to [profile.protectedDay || 20] if not explicitly set.
+ */
+export const getCriticalDays = (profile?: Partial<CompanyProfile>): number[] => {
+  if (!profile) return [20];
+  if (Array.isArray(profile.criticalDays) && profile.criticalDays.length > 0) {
+    const valid = Array.from(
+      new Set(
+        profile.criticalDays
+          .filter((d): d is number => typeof d === 'number' && !isNaN(d) && d >= 1 && d <= 31)
+      )
+    ).sort((a, b) => a - b);
+    if (valid.length > 0) return valid;
+  }
+  return [profile.protectedDay || 20];
+};
+
+/**
+ * Checks whether a given day of the month is configured as a critical lock date.
+ */
+export const isCriticalDay = (day: number, profile?: Partial<CompanyProfile>): boolean => {
+  const days = getCriticalDays(profile);
+  return days.includes(day);
+};
 

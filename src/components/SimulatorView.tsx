@@ -12,8 +12,9 @@ import {
   DollarSign,
   Building2,
   FileText,
+  Lock,
 } from 'lucide-react';
-import { CompanyDatabase, NavigationRoute, Supplier } from '../types';
+import { CompanyDatabase, NavigationRoute, Supplier, getCriticalDays } from '../types';
 import { formatMoney, formatDateBR, getTodayISO, addDaysToISO } from '../services/storage';
 import { FirebaseService } from '../services/firebase';
 
@@ -79,7 +80,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
   const sortedTerms = [...selectedTerms].sort((a, b) => a - b);
   const partAmount = partsCount > 0 ? Math.round((numVal / partsCount) * 100) / 100 : 0;
 
-  const protectedDay = data.profile.protectedDay || 20;
+  const criticalDays = getCriticalDays(data.profile);
 
   // Analysis of each projected installment
   const projectedInstallments = sortedTerms.map((days, index) => {
@@ -93,7 +94,8 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
     const combinedTotal = existingTotalOnDay + thisAmount;
 
     const dueDayNumber = parseInt(dueDate.split('-')[2], 10);
-    const isProtected = dueDayNumber === protectedDay;
+    const isProtected = criticalDays.includes(dueDayNumber);
+    const isCritical = isProtected;
     const isOverLimit = combinedTotal > data.profile.dailyLimit;
     const isNearLimit = combinedTotal > data.profile.dailyLimit * 0.8 && !isOverLimit;
 
@@ -101,14 +103,19 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
       index: index + 1,
       days,
       dueDate,
+      dueDayNumber,
       amount: thisAmount,
       existingTotalOnDay,
       combinedTotal,
       isProtected,
+      isCritical,
       isOverLimit,
       isNearLimit,
     };
   });
+
+  const criticalInstallments = projectedInstallments.filter((p) => p.isCritical);
+  const hasCriticalLock = criticalInstallments.length > 0;
 
   const handleLaunchPurchase = async () => {
     if (!numVal || numVal <= 0) {
@@ -119,6 +126,17 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
     if (selectedTerms.length === 0) {
       alert('Selecione ao menos um prazo de vencimento.');
       return;
+    }
+
+    if (hasCriticalLock) {
+      const lockDaysList = Array.from(new Set(criticalInstallments.map((c) => `Dia ${c.dueDayNumber}`))).join(', ');
+      const confirmProceed = window.confirm(
+        `🚨 ALERTA CRÍTICO: TRAVA DE COMPRAS ATIVADA!\n\n` +
+        `Esta compra contém ${criticalInstallments.length} parcela(s) com vencimento em data(s) de trava: ${lockDaysList}.\n\n` +
+        `Essas datas foram configuradas como críticas para proteção do caixa da empresa.\n\n` +
+        `Deseja realmente confirmar e lançar essa compra com vencimento nas datas de trava?`
+      );
+      if (!confirmProceed) return;
     }
 
     setLoading(true);
@@ -290,19 +308,32 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
               {PRESET_TERMS.map((term) => {
                 const isSelected = selectedTerms.includes(term);
+                const projectedDue = addDaysToISO(baseDate, term);
+                const dueDay = parseInt(projectedDue.split('-')[2], 10);
+                const isTermCrit = criticalDays.includes(dueDay);
+
                 return (
                   <button
                     key={term}
                     type="button"
                     onClick={() => toggleTerm(term)}
-                    className={`py-2.5 px-2 rounded-xl text-xs font-bold transition-all flex flex-col items-center justify-center cursor-pointer border ${
+                    className={`py-2 px-2 rounded-xl text-xs font-bold transition-all flex flex-col items-center justify-center cursor-pointer border relative ${
                       isSelected
-                        ? 'bg-teal-400 text-slate-950 border-teal-400 shadow-md shadow-teal-500/20 scale-[1.02]'
+                        ? isTermCrit
+                          ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/30 scale-[1.02]'
+                          : 'bg-teal-400 text-slate-950 border-teal-400 shadow-md shadow-teal-500/20 scale-[1.02]'
+                        : isTermCrit
+                        ? 'bg-amber-950/30 text-amber-300 border-amber-500/30 hover:border-amber-400'
                         : 'bg-slate-900/90 text-slate-300 border-white/10 hover:border-teal-500/30 hover:bg-slate-800'
                     }`}
                   >
-                    <span className="text-sm font-mono font-extrabold">{term}d</span>
-                    <span className="text-[10px] opacity-80">{term} dias</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-sm font-mono font-extrabold">{term}d</span>
+                      {isTermCrit && <Lock className="w-3 h-3 text-amber-400" />}
+                    </div>
+                    <span className="text-[10px] opacity-80">
+                      {isTermCrit ? `Trava (D${dueDay})` : `${term} dias`}
+                    </span>
                   </button>
                 );
               })}
@@ -329,6 +360,40 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
             </div>
           </div>
 
+          {/* Critical Lock Warning Banner for Buyer */}
+          {hasCriticalLock && (
+            <div className="p-4 rounded-xl bg-amber-500/15 border-2 border-amber-500/50 text-amber-200 flex items-start gap-3 shadow-lg shadow-amber-500/10">
+              <div className="p-2 rounded-lg bg-amber-500/20 text-amber-400 shrink-0 mt-0.5">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1.5 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <Lock className="w-4 h-4 text-amber-400" />
+                  <span className="font-extrabold text-xs sm:text-sm text-amber-300 uppercase tracking-wide">
+                    Alerta de Trava de Compra: Data Crítica Identificada!
+                  </span>
+                </div>
+                <p className="text-xs text-amber-200/90 leading-relaxed">
+                  Atenção Comprador: esta compra possui <strong>{criticalInstallments.length} parcela(s)</strong> com vencimento em data(s) configurada(s) como <strong>TRAVA DE COMPRA</strong>:
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {criticalInstallments.map((inst) => (
+                    <span
+                      key={inst.index}
+                      className="px-2.5 py-1 rounded-lg bg-amber-950/80 border border-amber-500/50 text-amber-300 font-mono text-xs font-bold flex items-center gap-1.5 shadow-sm"
+                    >
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Boleto {inst.index} ({inst.days}d): {formatDateBR(inst.dueDate)} (Dia {inst.dueDayNumber})</span>
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[11px] text-amber-400/90 pt-1">
+                  💡 <strong>Orientação:</strong> Evite compras com vencimentos nestas datas (folha, impostos ou despesas prioritárias). Recomenda-se ajustar os prazos ou negociar datas alternativas.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Real-time Detailed Projection Breakdown */}
           <div className="p-4 rounded-xl bg-slate-900/90 border border-teal-500/25 space-y-3">
             <div className="flex items-center justify-between text-xs font-bold text-teal-300 border-b border-white/[0.08] pb-2">
@@ -341,8 +406,8 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
                 <div
                   key={inst.days}
                   className={`p-3 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs ${
-                    inst.isProtected
-                      ? 'bg-purple-500/10 border-purple-500/40 text-purple-200'
+                    inst.isCritical
+                      ? 'bg-amber-500/15 border-amber-500/50 text-amber-200 ring-1 ring-amber-500/30'
                       : inst.isOverLimit
                       ? 'bg-rose-500/10 border-rose-500/40 text-rose-200'
                       : inst.isNearLimit
@@ -351,20 +416,23 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
                   }`}
                 >
                   <div className="flex items-center gap-2.5">
-                    <span className="w-6 h-6 rounded-lg bg-white/10 font-mono font-bold flex items-center justify-center text-xs shrink-0">
+                    <span className={`w-6 h-6 rounded-lg font-mono font-bold flex items-center justify-center text-xs shrink-0 ${
+                      inst.isCritical ? 'bg-amber-500/30 text-amber-300' : 'bg-white/10 text-white'
+                    }`}>
                       {inst.index}
                     </span>
                     <div>
-                      <div className="font-semibold text-white">
-                        Boleto {inst.index}/{partsCount} ({inst.days} dias)
-                      </div>
-                      <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5">
-                        <span>Vencimento: {formatDateBR(inst.dueDate)}</span>
-                        {inst.isProtected && (
-                          <span className="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-bold text-[10px]">
-                            DIA PROTEGIDO
+                      <div className="font-semibold text-white flex items-center gap-2 flex-wrap">
+                        <span>Boleto {inst.index}/{partsCount} ({inst.days} dias)</span>
+                        {inst.isCritical && (
+                          <span className="px-2 py-0.5 rounded bg-amber-500/25 border border-amber-500/50 text-amber-300 font-bold text-[10px] flex items-center gap-1">
+                            <Lock className="w-3 h-3 text-amber-400" />
+                            <span>TRAVA DE COMPRA (DIA {inst.dueDayNumber})</span>
                           </span>
                         )}
+                      </div>
+                      <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5 mt-0.5">
+                        <span>Vencimento: {formatDateBR(inst.dueDate)}</span>
                         {inst.isOverLimit && (
                           <span className="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 font-bold text-[10px]">
                             ESTOURA LIMITE

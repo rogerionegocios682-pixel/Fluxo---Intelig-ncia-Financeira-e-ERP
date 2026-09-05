@@ -1234,6 +1234,9 @@ export const FirebaseService = {
             dailyLimit: Number(remoteData.dailyLimit ?? currentProfile.dailyLimit ?? 0),
             monthlyLimit: Number(remoteData.monthlyLimit ?? currentProfile.monthlyLimit ?? 0),
             protectedDay: Number(remoteData.protectedDay ?? currentProfile.protectedDay ?? 20),
+            criticalDays: Array.isArray(remoteData.criticalDays)
+              ? remoteData.criticalDays
+              : [Number(remoteData.protectedDay ?? currentProfile.protectedDay ?? 20)],
           };
           emit();
         } else {
@@ -1420,18 +1423,73 @@ export const FirebaseService = {
   },
 
   async addSupplier(companyId: string, supplier: Omit<Supplier, 'id'>): Promise<string> {
+    const safeCompanyId = (!companyId || companyId === 'master' || companyId === 'master_default')
+      ? 'master_control'
+      : companyId;
     const supId = generateId('sup');
-    const path = `companies/${companyId}/suppliers/${supId}`;
+    const path = `companies/${safeCompanyId}/suppliers/${supId}`;
     try {
-      await setDoc(doc(db, 'companies', companyId, 'suppliers', supId), {
+      const compRef = doc(db, 'companies', safeCompanyId);
+      const compSnap = await getDoc(compRef);
+      if (!compSnap.exists()) {
+        await setDoc(compRef, {
+          id: safeCompanyId,
+          name: safeCompanyId === 'master_control' ? 'Painel Central Master' : 'Empresa Cadastrada',
+          status: 'ATIVA',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+      }
+
+      await setDoc(doc(db, 'companies', safeCompanyId, 'suppliers', supId), {
         ...supplier,
         id: supId,
-        companyId,
+        companyId: safeCompanyId,
         createdAt: new Date().toISOString(),
       });
       return supId;
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  },
+
+  async updateSupplier(companyId: string, supplierId: string, updates: Partial<Supplier>): Promise<void> {
+    const safeCompanyId = (!companyId || companyId === 'master' || companyId === 'master_default')
+      ? 'master_control'
+      : companyId;
+    const path = `companies/${safeCompanyId}/suppliers/${supplierId}`;
+    try {
+      await updateDoc(doc(db, 'companies', safeCompanyId, 'suppliers', supplierId), {
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  },
+
+  async deleteSupplier(companyId: string, supplierId: string): Promise<void> {
+    const safeCompanyId = (!companyId || companyId === 'master' || companyId === 'master_default')
+      ? 'master_control'
+      : companyId;
+    const path = `companies/${safeCompanyId}/suppliers/${supplierId}`;
+    try {
+      await deleteDoc(doc(db, 'companies', safeCompanyId, 'suppliers', supplierId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  },
+
+  async getSuppliers(companyId: string): Promise<Supplier[]> {
+    const safeCompanyId = (!companyId || companyId === 'master' || companyId === 'master_default')
+      ? 'master_control'
+      : companyId;
+    try {
+      const snap = await getDocs(collection(db, 'companies', safeCompanyId, 'suppliers'));
+      return snap.docs.map((d) => ({ ...d.data(), id: d.id } as Supplier));
+    } catch (err) {
+      console.warn('Error fetching suppliers:', err);
+      return [];
     }
   },
 

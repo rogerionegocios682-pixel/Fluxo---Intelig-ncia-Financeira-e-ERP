@@ -15,6 +15,7 @@ import {
   DollarSign,
   Activity,
   ArrowDownRight,
+  Lock,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -28,7 +29,7 @@ import {
   Legend,
   CartesianGrid,
 } from 'recharts';
-import { Bill, CompanyDatabase, NavigationRoute } from '../types';
+import { Bill, CompanyDatabase, NavigationRoute, getCriticalDays } from '../types';
 import { formatMoney, formatDateBR, getTodayISO, addDaysToISO } from '../services/storage';
 
 interface DashboardViewProps {

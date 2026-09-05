@@ -9,8 +9,9 @@ import {
   Clock,
   X,
   Plus,
+  Lock,
 } from 'lucide-react';
-import { Bill, CalendarFilterMode, CompanyDatabase } from '../types';
+import { Bill, CalendarFilterMode, CompanyDatabase, getCriticalDays } from '../types';
 import {
   formatMoney,
   formatDateBR,
@@ -54,7 +55,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     setCurrentDate(new Date());
   };
 
-  const protectedDay = data.profile.protectedDay || 20;
+  const criticalDays = getCriticalDays(data.profile);
 
   // Build calendar days array based on viewMode
   let daysToRender: Array<{
@@ -86,7 +87,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         dayNum,
         isCurrentMonth: true,
         isToday: dISO === today,
-        isProtected: dayNum === protectedDay,
+        isProtected: criticalDays.includes(dayNum),
         bills,
         totalAmount,
         pendingAmount,
@@ -110,7 +111,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         dayNum,
         isCurrentMonth: true,
         isToday: dISO === today,
-        isProtected: dayNum === protectedDay,
+        isProtected: criticalDays.includes(dayNum),
         bills,
         totalAmount,
         pendingAmount,
@@ -139,7 +140,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         dayNum: dNum,
         isCurrentMonth: false,
         isToday: dISO === today,
-        isProtected: dNum === protectedDay,
+        isProtected: criticalDays.includes(dNum),
         bills,
         totalAmount,
         pendingAmount,
@@ -162,7 +163,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         dayNum: d,
         isCurrentMonth: true,
         isToday: dISO === today,
-        isProtected: d === protectedDay,
+        isProtected: criticalDays.includes(d),
         bills,
         totalAmount,
         pendingAmount,
@@ -186,7 +187,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         dayNum: r,
         isCurrentMonth: false,
         isToday: dISO === today,
-        isProtected: r === protectedDay,
+        isProtected: criticalDays.includes(r),
         bills,
         totalAmount,
         pendingAmount,
@@ -280,8 +281,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             <span>Excedeu Limite Diário ({formatMoney(data.profile.dailyLimit)})</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-            <span>Dia Protegido / Folha ({protectedDay})</span>
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+            <span>Travas de Compra ({criticalDays.map((d) => `Dia ${d}`).join(', ')})</span>
           </div>
         </div>
       </div>
@@ -323,7 +324,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   isSelected
                     ? 'ring-2 ring-teal-400 border-teal-400 bg-slate-800'
                     : day.isProtected
-                    ? 'bg-purple-950/20 border-purple-500/40 hover:border-purple-400'
+                    ? 'bg-amber-950/20 border-amber-500/40 hover:border-amber-400'
                     : day.isOverLimit
                     ? 'bg-rose-950/20 border-rose-500/40 hover:border-rose-400'
                     : hasBills
@@ -338,7 +339,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       day.isToday
                         ? 'w-6 h-6 rounded-full bg-teal-400 text-slate-950 flex items-center justify-center'
                         : day.isProtected
-                        ? 'text-purple-300 font-extrabold'
+                        ? 'text-amber-300 font-extrabold'
                         : 'text-slate-300'
                     }`}
                   >
@@ -346,8 +347,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   </span>
 
                   {day.isProtected && (
-                    <span className="p-0.5 rounded bg-purple-500/20 text-purple-300" title="Dia Protegido">
-                      <ShieldCheck className="w-3 h-3" />
+                    <span className="p-0.5 rounded bg-amber-500/20 text-amber-300" title={`Trava de Compra: Dia ${day.dayNum}`}>
+                      <Lock className="w-3 h-3" />
                     </span>
                   )}
                 </div>
