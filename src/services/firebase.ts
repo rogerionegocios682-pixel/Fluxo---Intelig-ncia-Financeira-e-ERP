@@ -435,6 +435,120 @@ export const FirebaseService = {
           }
         }
 
+        // Try case-insensitive scan in users collection
+        if (!userData) {
+          try {
+            const allUsersSnap = await getDocs(collection(db, 'users'));
+            for (const d of allUsersSnap.docs) {
+              const data = d.data() as UserAccount;
+              if (data.email && data.email.trim().toLowerCase() === cleanEmail) {
+                userData = data;
+                userDocId = d.id;
+                break;
+              }
+            }
+          } catch (e) {
+            console.warn('Scan user lookup error:', e);
+          }
+        }
+
+        // If not found in users, look up in companies collection
+        if (!userData) {
+          try {
+            const comp = await this.findCompanyByEmail(cleanEmail);
+            if (comp) {
+              userDocId = comp.ownerUid || `usr_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+              userData = {
+                uid: userDocId,
+                email: cleanEmail,
+                name: comp.managerName || comp.name,
+                password: cleanPass,
+                companyId: comp.id,
+                companyName: comp.name,
+                phone: comp.phone || '',
+                role: 'admin',
+                department: 'Diretoria',
+                status: comp.status === 'BLOQUEADA' ? 'BLOQUEADO' : 'ATIVO',
+                approvalStatus: 'approved',
+                licenseDays: 365,
+                expiresAt: '2099-12-31',
+                createdAt: comp.createdAt || new Date().toISOString(),
+                lastAccessAt: new Date().toISOString(),
+              };
+              // Persist self-healed user document
+              await setDoc(doc(db, 'users', userDocId), userData, { merge: true });
+            }
+          } catch (e) {
+            console.warn('Company-based user lookup error:', e);
+          }
+        }
+
+        // If still not found, check access_requests collection
+        if (!userData) {
+          try {
+            const reqSnap = await getDocs(
+              query(collection(db, 'access_requests'), where('email', '==', cleanEmail))
+            );
+            if (!reqSnap.empty) {
+              const reqData = reqSnap.docs[0].data() as AccessRequest;
+              const allComps = await getDocs(collection(db, 'companies'));
+              let matchedComp = allComps.docs.find((c) => {
+                const cdata = c.data() as CompanyProfile;
+                return (
+                  cdata.name?.trim().toLowerCase() === reqData.companyName?.trim().toLowerCase() ||
+                  cdata.email?.trim().toLowerCase() === cleanEmail
+                );
+              });
+
+              const companyId = matchedComp ? matchedComp.id : generateId('emp');
+              if (!matchedComp) {
+                await setDoc(doc(db, 'companies', companyId), {
+                  id: companyId,
+                  name: reqData.companyName,
+                  tradeName: reqData.companyName,
+                  cnpj: '',
+                  phone: reqData.phone || '',
+                  email: cleanEmail,
+                  managerName: reqData.name || reqData.companyName,
+                  address: '',
+                  city: '',
+                  state: '',
+                  logo: '',
+                  status: 'ATIVA',
+                  dailyLimit: 0,
+                  monthlyLimit: 0,
+                  protectedDay: 20,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                  ownerUid: userDocId,
+                  collaboratorUids: [userDocId],
+                });
+              }
+
+              userData = {
+                uid: userDocId,
+                email: cleanEmail,
+                name: reqData.name || reqData.companyName,
+                password: cleanPass,
+                companyId,
+                companyName: reqData.companyName,
+                phone: reqData.phone || '',
+                role: 'admin',
+                department: 'Diretoria',
+                status: 'ATIVO',
+                approvalStatus: 'approved',
+                licenseDays: reqData.licenseDays || 365,
+                expiresAt: addDaysToISO(getTodayISO(), reqData.licenseDays || 365),
+                createdAt: reqData.createdAt || new Date().toISOString(),
+                lastAccessAt: new Date().toISOString(),
+              };
+              await setDoc(doc(db, 'users', userDocId), userData, { merge: true });
+            }
+          } catch (e) {
+            console.warn('Access-request user lookup notice:', e);
+          }
+        }
+
         // Auto-provision Leandra Balbino store if credentials match and doc not yet saved in DB
         if (!userData && cleanEmail === 'leandrabalbino@gmail.com' && cleanPass === 'Le@160606') {
           const res = await FirebaseService.registerStoreDirectly({
@@ -455,28 +569,37 @@ export const FirebaseService = {
 
         if (userData) {
           // Validate password if stored
-          if (userData.password && userData.password.trim() !== cleanPass) {
+          if (userData.password && userData.password.trim() && userData.password.trim() !== cleanPass) {
             throw new Error('Senha incorreta. Verifique suas credenciais de acesso.');
           }
 
-          // Try keeping anonymous session if available
+          // If password wasn't stored previously, store it now
+          if (!userData.password) {
+            try {
+              await updateDoc(doc(db, 'users', userDocId), { password: cleanPass });
+            } catch {}
+          }
+
+          // Keep anonymous Firebase Auth session active if available for Firestore rules
           let authUser = auth.currentUser;
           if (!authUser) {
             try {
               const anonRes = await signInAnonymously(auth);
               authUser = anonRes.user;
             } catch {
-              // Anonymous auth not required for Firestore read/write
+              // Anonymous auth not required for open Firestore rules
             }
           }
 
-          const customUser: FirebaseUser = authUser || ({
+          // Construct user object with the user's REAL Firestore UID and email
+          const customUser: FirebaseUser = {
+            ...(authUser ? (authUser as any) : {}),
             uid: userDocId,
             email: cleanEmail,
             displayName: userData.name || userData.companyName || 'Usuário da Loja',
             emailVerified: true,
             isAnonymous: false,
-            metadata: {},
+            metadata: (authUser?.metadata || {}) as any,
             providerData: [],
             refreshToken: '',
             tenantId: null,
@@ -488,7 +611,7 @@ export const FirebaseService = {
             phoneNumber: userData.phone || null,
             photoURL: null,
             providerId: 'firebase',
-          } as unknown as FirebaseUser);
+          } as unknown as FirebaseUser;
 
           // Update last access timestamp
           try {
@@ -505,7 +628,7 @@ export const FirebaseService = {
                 uid: userDocId,
                 email: cleanEmail,
                 companyId: userData.companyId,
-                name: userData.name,
+                name: userData.name || userData.companyName || 'Usuário da Loja',
                 role: userData.role || 'admin',
               })
             );
@@ -577,13 +700,14 @@ export const FirebaseService = {
         } catch {}
       }
 
-      const customUser: FirebaseUser = authUser || ({
+      const customUser: FirebaseUser = {
+        ...(authUser ? (authUser as any) : {}),
         uid: userDocId,
         email: cleanEmail,
         displayName: displayName || companyName || cleanEmail.split('@')[0],
         emailVerified: true,
         isAnonymous: false,
-        metadata: {},
+        metadata: (authUser?.metadata || {}) as any,
         providerData: [],
         refreshToken: '',
         tenantId: null,
@@ -595,7 +719,7 @@ export const FirebaseService = {
         phoneNumber: phone || null,
         photoURL: null,
         providerId: 'firebase',
-      } as unknown as FirebaseUser);
+      } as unknown as FirebaseUser;
 
       return customUser;
     }
@@ -627,43 +751,128 @@ export const FirebaseService = {
   },
 
   // USER PROFILE & LICENSING
-  async getUserProfile(uid: string): Promise<UserAccount | null> {
-    const path = `users/${uid}`;
+  async findCompanyByEmail(email: string): Promise<CompanyProfile | null> {
+    const cleanEmail = email.trim().toLowerCase();
+    try {
+      const q = query(collection(db, 'companies'), where('email', '==', cleanEmail));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        return { ...(snap.docs[0].data() as CompanyProfile), id: snap.docs[0].id };
+      }
+      const allComp = await getDocs(collection(db, 'companies'));
+      for (const d of allComp.docs) {
+        const data = d.data() as CompanyProfile;
+        if (data.email && data.email.trim().toLowerCase() === cleanEmail) {
+          return { ...data, id: d.id };
+        }
+      }
+      return null;
+    } catch (err) {
+      console.warn('findCompanyByEmail error:', err);
+      return null;
+    }
+  },
+
+  async getUserProfile(uid: string, emailFallback?: string | null): Promise<UserAccount | null> {
+    const cleanEmail = emailFallback?.trim().toLowerCase() || (uid?.includes('@') ? uid.trim().toLowerCase() : null);
     try {
       // 1. Direct document check
-      const snap = await getDoc(doc(db, 'users', uid));
-      if (snap.exists()) {
-        const data = snap.data() as UserAccount;
-        return {
-          ...data,
-          uid,
-        };
-      }
-
-      // 2. Prefixed id check (usr_email)
-      const prefixedId = uid.startsWith('usr_') ? uid : `usr_${uid.replace(/[^a-zA-Z0-9]/g, '_')}`;
-      if (prefixedId !== uid) {
-        const snap2 = await getDoc(doc(db, 'users', prefixedId));
-        if (snap2.exists()) {
-          const data2 = snap2.data() as UserAccount;
+      if (uid && !uid.includes('@')) {
+        const snap = await getDoc(doc(db, 'users', uid));
+        if (snap.exists()) {
+          const data = snap.data() as UserAccount;
           return {
-            ...data2,
-            uid: prefixedId,
+            ...data,
+            uid,
+            status: data.status || 'ATIVO',
+            approvalStatus: data.approvalStatus || 'approved',
           };
         }
       }
 
-      // 3. Email query check
-      if (uid.includes('@')) {
+      // 2. Prefixed id check (usr_email)
+      if (cleanEmail) {
+        const emailDocId = `usr_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        const snap2 = await getDoc(doc(db, 'users', emailDocId));
+        if (snap2.exists()) {
+          const data2 = snap2.data() as UserAccount;
+          return {
+            ...data2,
+            uid: emailDocId,
+            status: data2.status || 'ATIVO',
+            approvalStatus: data2.approvalStatus || 'approved',
+          };
+        }
+
+        // 3. Email query check
         const querySnap = await getDocs(
-          query(collection(db, 'users'), where('email', '==', uid.toLowerCase().trim()))
+          query(collection(db, 'users'), where('email', '==', cleanEmail))
         );
         if (!querySnap.empty) {
           const snap3 = querySnap.docs[0];
+          const data3 = snap3.data() as UserAccount;
           return {
-            ...(snap3.data() as UserAccount),
+            ...data3,
             uid: snap3.id,
+            status: data3.status || 'ATIVO',
+            approvalStatus: data3.approvalStatus || 'approved',
           };
+        }
+
+        // 4. Case-insensitive scan in users collection
+        const allUsersSnap = await getDocs(collection(db, 'users'));
+        for (const d of allUsersSnap.docs) {
+          const dData = d.data() as UserAccount;
+          if (dData.email && dData.email.trim().toLowerCase() === cleanEmail) {
+            return {
+              ...dData,
+              uid: d.id,
+              status: dData.status || 'ATIVO',
+              approvalStatus: dData.approvalStatus || 'approved',
+            };
+          }
+        }
+
+        // 5. Look up company by email and self-heal user profile
+        const comp = await this.findCompanyByEmail(cleanEmail);
+        if (comp) {
+          const recoveredProfile: UserAccount = {
+            uid: uid || `usr_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
+            email: cleanEmail,
+            name: comp.managerName || comp.name,
+            companyId: comp.id,
+            companyName: comp.name,
+            phone: comp.phone || '',
+            role: 'admin',
+            department: 'Diretoria',
+            status: comp.status === 'BLOQUEADA' ? 'BLOQUEADO' : 'ATIVO',
+            approvalStatus: 'approved',
+            licenseDays: 365,
+            expiresAt: '2099-12-31',
+            createdAt: comp.createdAt || new Date().toISOString(),
+            lastAccessAt: new Date().toISOString(),
+          };
+          try {
+            await setDoc(doc(db, 'users', recoveredProfile.uid!), recoveredProfile, { merge: true });
+          } catch {}
+          return recoveredProfile;
+        }
+      }
+
+      // 6. Check if uid itself might be usr_something
+      if (uid) {
+        const prefixedId = uid.startsWith('usr_') ? uid : `usr_${uid.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        if (prefixedId !== uid) {
+          const snap2 = await getDoc(doc(db, 'users', prefixedId));
+          if (snap2.exists()) {
+            const data2 = snap2.data() as UserAccount;
+            return {
+              ...data2,
+              uid: prefixedId,
+              status: data2.status || 'ATIVO',
+              approvalStatus: data2.approvalStatus || 'approved',
+            };
+          }
         }
       }
 
@@ -911,6 +1120,10 @@ export const FirebaseService = {
     }
 
     await this.saveUserProfile(ownerUser.uid, userProfileData);
+    const userDocId = `usr_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    if (ownerUser.uid !== userDocId) {
+      await this.saveUserProfile(userDocId, { ...userProfileData, uid: userDocId });
+    }
 
     // Save store session for automatic connection
     try {
@@ -1008,7 +1221,6 @@ export const FirebaseService = {
     };
 
     // 1. Company Profile listener (monitors status, dailyLimit, monthlyLimit, protectedDay, metadata)
-    const compDocPath = `companies/${companyId}`;
     const unsubProfile = onSnapshot(
       doc(db, 'companies', companyId),
       (snap) => {
@@ -1024,18 +1236,19 @@ export const FirebaseService = {
             protectedDay: Number(remoteData.protectedDay ?? currentProfile.protectedDay ?? 20),
           };
           emit();
+        } else {
+          // If document doesn't exist yet, emit current fallback so UI is not stuck
+          emit();
         }
       },
       (error) => {
         console.warn('Realtime company profile sync notice:', error);
         if (onError) onError(error);
-        handleFirestoreError(error, OperationType.GET, compDocPath);
       }
     );
     unsubs.push(unsubProfile);
 
     // 2. Bills Subcollection listener
-    const billsColPath = `companies/${companyId}/bills`;
     const unsubBills = onSnapshot(
       collection(db, 'companies', companyId, 'bills'),
       (snap) => {
@@ -1045,13 +1258,11 @@ export const FirebaseService = {
       (error) => {
         console.warn('Realtime bills sync notice:', error);
         if (onError) onError(error);
-        handleFirestoreError(error, OperationType.GET, billsColPath);
       }
     );
     unsubs.push(unsubBills);
 
     // 3. Purchases Subcollection listener
-    const purchasesColPath = `companies/${companyId}/purchases`;
     const unsubPurchases = onSnapshot(
       collection(db, 'companies', companyId, 'purchases'),
       (snap) => {
@@ -1061,13 +1272,11 @@ export const FirebaseService = {
       (error) => {
         console.warn('Realtime purchases sync notice:', error);
         if (onError) onError(error);
-        handleFirestoreError(error, OperationType.GET, purchasesColPath);
       }
     );
     unsubs.push(unsubPurchases);
 
     // 4. Suppliers Subcollection listener
-    const supColPath = `companies/${companyId}/suppliers`;
     const unsubSuppliers = onSnapshot(
       collection(db, 'companies', companyId, 'suppliers'),
       (snap) => {
@@ -1077,13 +1286,11 @@ export const FirebaseService = {
       (error) => {
         console.warn('Realtime suppliers sync notice:', error);
         if (onError) onError(error);
-        handleFirestoreError(error, OperationType.GET, supColPath);
       }
     );
     unsubs.push(unsubSuppliers);
 
     // 5. Collaborators Subcollection listener
-    const colabColPath = `companies/${companyId}/collaborators`;
     const unsubColab = onSnapshot(
       collection(db, 'companies', companyId, 'collaborators'),
       (snap) => {
@@ -1093,7 +1300,6 @@ export const FirebaseService = {
       (error) => {
         console.warn('Realtime collaborators sync notice:', error);
         if (onError) onError(error);
-        handleFirestoreError(error, OperationType.GET, colabColPath);
       }
     );
     unsubs.push(unsubColab);

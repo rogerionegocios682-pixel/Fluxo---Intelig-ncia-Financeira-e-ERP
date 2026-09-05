@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { AuthSession, Bill, CompanyDatabase, NavigationRoute, UserAccount } from './types';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { AuthSession, Bill, CompanyDatabase, CompanyProfile, NavigationRoute, UserAccount } from './types';
 import { FirebaseService, SUPER_ADMIN_EMAIL, auth, db, runFirebaseDiagnostic } from './services/firebase';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
@@ -182,28 +182,50 @@ export function App() {
         const userDocRef = doc(db, 'users', user.uid);
         profileUnsub = onSnapshot(
           userDocRef,
-          (snap) => {
+          async (snap) => {
             if (snap.exists()) {
               const data = snap.data() as UserAccount;
               setUserProfile({ ...data, uid: user.uid });
               const isMaster = data.role === 'master' || FirebaseService.isMasterEmail(user.email);
               if (isMaster) {
-                // MASTER role check safely handles null, undefined, or 'master' store ID
                 setActiveCompanyId((prev) => (prev && prev !== 'master' ? prev : 'master_default'));
               } else if (data.companyId && data.companyId !== 'master') {
                 setActiveCompanyId(data.companyId);
               }
             } else {
-              setUserProfile(null);
-              if (FirebaseService.isMasterEmail(user.email)) {
-                setActiveCompanyId('master_default');
+              // User document was not found by Auth UID. Look up via email fallback or company profile
+              const fallbackProf = await FirebaseService.getUserProfile(user.uid, user.email);
+              if (fallbackProf) {
+                setUserProfile({ ...fallbackProf, uid: user.uid });
+                // Link profile to auth UID so subsequent direct lookups hit immediately
+                try {
+                  await setDoc(doc(db, 'users', user.uid), { ...fallbackProf, uid: user.uid }, { merge: true });
+                } catch {}
+                const isMaster = fallbackProf.role === 'master' || FirebaseService.isMasterEmail(user.email);
+                if (isMaster) {
+                  setActiveCompanyId((prev) => (prev && prev !== 'master' ? prev : 'master_default'));
+                } else if (fallbackProf.companyId && fallbackProf.companyId !== 'master') {
+                  setActiveCompanyId(fallbackProf.companyId);
+                }
+              } else {
+                setUserProfile(null);
+                if (FirebaseService.isMasterEmail(user.email)) {
+                  setActiveCompanyId('master_default');
+                }
               }
             }
             runFirebaseDiagnostic(user);
             setIsAuthChecking(false);
           },
-          (err) => {
-            console.error('Error listening to user profile:', err);
+          async (err) => {
+            console.warn('Error listening to direct user profile, checking fallback:', err);
+            const fallbackProf = await FirebaseService.getUserProfile(user.uid, user.email);
+            if (fallbackProf) {
+              setUserProfile(fallbackProf);
+              if (fallbackProf.companyId && fallbackProf.companyId !== 'master') {
+                setActiveCompanyId(fallbackProf.companyId);
+              }
+            }
             if (FirebaseService.isMasterEmail(user.email)) {
               setActiveCompanyId('master_default');
             }
@@ -260,20 +282,39 @@ export function App() {
       activeCompanyId,
       (data) => {
         if (!isSubscribed) return;
-        setCompanyData((prev) => {
-          // Trigger immediate state update across all components
-          return {
-            ...data,
-            profile: {
-              ...data.profile,
-              id: activeCompanyId,
-              status: data.profile.status || 'ATIVA',
-            },
-          };
+
+        const updatedProfile: CompanyProfile = {
+          ...data.profile,
+          id: activeCompanyId,
+          status: data.profile.status || 'ATIVA',
+          dailyLimit: Number(data.profile.dailyLimit || 0),
+          monthlyLimit: Number(data.profile.monthlyLimit || 0),
+          protectedDay: Number(data.profile.protectedDay || 20),
+        };
+
+        // Trigger immediate state update across all components with fresh references
+        setCompanyData({
+          profile: updatedProfile,
+          bills: [...data.bills],
+          purchases: [...data.purchases],
+          suppliers: [...data.suppliers],
+          collaborators: [...data.collaborators],
+        });
+
+        // Instantly synchronize store status in userProfile state across all active devices
+        setUserProfile((prev) => {
+          if (!prev) return prev;
+          if (prev.storeStatus !== updatedProfile.status) {
+            return {
+              ...prev,
+              storeStatus: updatedProfile.status,
+            };
+          }
+          return prev;
         });
       },
       (error) => {
-        console.error(`[Firestore Realtime] Sync error for store ${activeCompanyId}:`, error);
+        console.warn(`[Firestore Realtime] Sync notice for store ${activeCompanyId}:`, error);
       }
     );
 
@@ -283,8 +324,11 @@ export function App() {
     };
   }, [activeCompanyId, isSuperAdmin]);
 
-  const handleAuthSuccess = (user: FirebaseUser, companyId: string) => {
+  const handleAuthSuccess = (user: FirebaseUser, companyId: string, profile?: UserAccount) => {
     setCurrentUser(user);
+    if (profile) {
+      setUserProfile(profile);
+    }
     const isMaster = FirebaseService.isMasterEmail(user.email);
     if (isMaster) {
       setActiveCompanyId(companyId || 'master_default');

@@ -29,7 +29,7 @@ import { User as FirebaseUser } from 'firebase/auth';
 import { UserAccount } from '../types';
 
 interface AuthViewProps {
-  onAuthSuccess: (user: FirebaseUser, companyId: string) => void;
+  onAuthSuccess: (user: FirebaseUser, companyId: string, profile?: UserAccount) => void;
 }
 
 type AuthTab = 'login' | 'signup' | 'forgot' | 'company_setup' | 'master_login';
@@ -92,7 +92,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthSuccess }) => {
           const { user, profile } = await FirebaseService.authenticateMaster(loginPassword, loginEmail);
           setCurrentUser(user);
           setUserProfile(profile);
-          onAuthSuccess(user, 'master');
+          onAuthSuccess(user, 'master', profile);
           return;
         } catch {
           // fallback to regular login flow below
@@ -105,8 +105,35 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthSuccess }) => {
       // Master user bypass
       const isMaster = FirebaseService.isMasterEmail(user.email);
 
-      // Check profile in Firestore
-      const profile = await FirebaseService.getUserProfile(user.uid);
+      // Check profile in Firestore with email fallback
+      let profile = await FirebaseService.getUserProfile(user.uid, user.email || loginEmail);
+
+      // If profile is missing or lacks companyId, search company by email to auto-link
+      if ((!profile || !profile.companyId) && !isMaster) {
+        const comp = await FirebaseService.findCompanyByEmail(user.email || loginEmail);
+        if (comp) {
+          profile = {
+            uid: user.uid,
+            email: user.email || loginEmail.trim().toLowerCase(),
+            name: comp.managerName || comp.name,
+            companyId: comp.id,
+            companyName: comp.name,
+            phone: comp.phone,
+            role: 'admin',
+            department: 'Diretoria',
+            status: comp.status === 'BLOQUEADA' ? 'BLOQUEADO' : 'ATIVO',
+            approvalStatus: 'approved',
+            licenseDays: 365,
+            expiresAt: '2099-12-31',
+            createdAt: comp.createdAt || new Date().toISOString(),
+            lastAccessAt: new Date().toISOString(),
+          };
+          try {
+            await FirebaseService.saveUserProfile(user.uid, profile);
+          } catch {}
+        }
+      }
+
       if (profile) {
         setUserProfile(profile);
 
@@ -127,24 +154,19 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthSuccess }) => {
                 setLoading(false);
                 return;
               }
-              if (companyDoc.status === 'PENDENTE') {
-                setError('O cadastro da sua loja ainda está aguardando ativação.');
-                setLoading(false);
-                return;
-              }
             }
           }
         }
 
         if (profile.companyId || isMaster) {
-          onAuthSuccess(user, profile.companyId || 'master');
+          onAuthSuccess(user, profile.companyId || 'master', profile);
           return;
         }
       }
 
       // If master with no company
       if (isMaster) {
-        onAuthSuccess(user, 'master');
+        onAuthSuccess(user, 'master', profile || undefined);
         return;
       }
 
